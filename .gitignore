@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# Local config overrides (template lives at config/bot.json5)
+config/bot.json5.local
+config/*.local.json5
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Smoke test artifacts (normally cleaned by scripts/smoke.mjs)
+src/commands/_smoke_*.ts

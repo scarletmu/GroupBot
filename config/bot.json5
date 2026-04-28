@@ -1,0 +1,36 @@
+{
+  // Reverse-WS listen address. NapCat connects here.
+  // Changing listen.* requires a process restart.
+  listen: {
+    host: "127.0.0.1",
+    port: 6700,
+    token: "change-me",
+  },
+
+  // Bot's own QQ uin. Used for at-detection in groups.
+  selfId: 10001,
+
+  // Group whitelist. Only groups in this list will route commands when @bot.
+  allowedGroups: [],
+
+  // Private-chat user whitelist. Empty array = allow everyone.
+  allowedUsers: [],
+
+  // Trigger prefix. Default "/", can be "!" or any non-empty string.
+  prefix: "/",
+
+  // Per-user rate limit (token bucket: perUser triggers per windowMs).
+  rateLimit: {
+    perUser: 5,
+    windowMs: 10000,
+  },
+
+  // Command plugin directory (relative to repo root).
+  commandsDir: "src/commands",
+
+  // Logging. Setting log.dir adds a file sink in addition to stdout.
+  log: {
+    level: "info",
+    dir: "logs",
+  },
+}

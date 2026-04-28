@@ -5,6 +5,7 @@ import type {
   PrivateMessageEvent,
   Segment,
 } from '../events/schema.js';
+import type { LlmClient } from '../llm/api.js';
 import type { CommandRegistry } from '../plugins/registry.js';
 import type { Ob11Client } from '../transport/ob11-client.js';
 import type { CommandContext, CommandHandler, ReplyContent } from '../plugins/api.js';
@@ -24,6 +25,7 @@ export class Dispatcher {
     private readonly registry: CommandRegistry,
     private readonly log: Logger,
     private readonly cfg: () => BotConfig,
+    private readonly llm: LlmClient,
   ) {}
 
   async handlePrivate(ev: PrivateMessageEvent): Promise<void> {
@@ -93,6 +95,7 @@ export class Dispatcher {
       log: this.log.child({ cmd: handler.name }),
       cfg,
       listCommands: () => this.registry.list(),
+      llm: this.llm,
     };
 
     try {

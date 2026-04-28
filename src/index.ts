@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import pino, { multistream, type StreamEntry } from 'pino';
 import { ConfigLoader } from './config/loader.js';
 import { parseFrame } from './events/parse.js';
+import { createLlmClient } from './llm/client.js';
 import { CommandRegistry } from './plugins/registry.js';
 import { Dispatcher } from './router/dispatch.js';
 import { Ob11Client } from './transport/ob11-client.js';
@@ -44,7 +45,15 @@ async function main(): Promise<void> {
   await registry.loadAll();
   registry.start();
 
-  const dispatcher = new Dispatcher(client, registry, log.child({ mod: 'dispatch' }), () => cfg);
+  const llm = createLlmClient(() => cfg, log.child({ mod: 'llm' }));
+
+  const dispatcher = new Dispatcher(
+    client,
+    registry,
+    log.child({ mod: 'dispatch' }),
+    () => cfg,
+    llm,
+  );
 
   wss.on('frame', (raw) => {
     const f = parseFrame(raw);

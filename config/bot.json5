@@ -33,4 +33,25 @@
     level: "info",
     dir: "logs",
   },
+
+  // LLM shared client (OpenAI-compatible). Optional. When omitted, any
+  // handler that calls ctx.llm.chat() throws LlmError('NOT_CONFIGURED').
+  // Hot-reloadable: changes to providers / default take effect on next call.
+  // Bot remains command-driven: never expose direct user→LLM dialogue.
+  // llm: {
+  //   default: "openai",
+  //   providers: {
+  //     openai: {
+  //       baseUrl: "https://api.openai.com/v1",
+  //       apiKey: "sk-...",
+  //       model: "gpt-4o-mini",
+  //       timeout: 30000,
+  //     },
+  //     deepseek: {
+  //       baseUrl: "https://api.deepseek.com/v1",
+  //       apiKey: "sk-...",
+  //       model: "deepseek-chat",
+  //     },
+  //   },
+  // },
 }

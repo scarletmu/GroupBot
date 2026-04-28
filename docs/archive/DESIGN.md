@@ -123,11 +123,23 @@ QQBot/
   // 命令插件目录（相对项目根）
   commandsDir: "src/commands",
   // 日志
-  log: { level: "info", dir: "logs" }
+  log: { level: "info", dir: "logs" },
+  // 可选：OpenAI 兼容 LLM 共享客户端（详见 §3.6）
+  llm: {
+    default: "openai",
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-...",
+        model: "gpt-4o-mini",
+        timeout: 30000
+      }
+    }
+  }
 }
 ```
 
-热加载语义：`allowedGroups / allowedUsers / prefix / rateLimit / log.level` 改完即生效；`listen.*` 改动需要重启进程（启动期日志会提示）。
+热加载语义：`allowedGroups / allowedUsers / prefix / rateLimit / log.level / llm.*` 改完即生效；`listen.*` 改动需要重启进程（启动期日志会提示）。
 
 ### 3.5 插件契约
 
@@ -149,10 +161,61 @@ export interface CommandContext {
   cfg: BotConfig;
   // 当前已注册命令快照（按 name 排序），仅供 /help 渲染列表使用
   listCommands(): readonly CommandHandler[];
+  // 共享 OpenAI 兼容 LLM 客户端（详见 §3.6）。始终存在；未配置时 chat() 抛 LlmError('NOT_CONFIGURED')。
+  llm: LlmClient;
 }
 ```
 
 新增命令 = 在 `src/commands/` 加一个文件 `default export` 一个 `CommandHandler`。`registry` 监听该目录，文件落盘后重新 import（带 cache busting）即生效，不需要重启进程。
+
+**硬规则**：LLM 是 handler 作者用的基础设施，bot 不向终端用户暴露任何直接对话入口。不允许出现 "用户随便发一句话 → 进 LLM" 的命令；只允许有界、明确目标的工具命令（例如 `/translate`）。
+
+### 3.6 LLM 共享客户端
+
+底层共享能力，不是面向用户的命令。任何 handler 都可通过 `ctx.llm.chat(...)` 调用 OpenAI 兼容 API；用户不会与 LLM 直接对话。
+
+**模块边界**
+
+- `src/llm/api.ts`：契约（`ChatMessage`、`ContentPart`、`ChatRequest`、`ChatResponse`、`LlmError`、`LlmClient`）。
+- `src/llm/client.ts`：`createLlmClient(cfg, log)` 实现；用 Node 内置 `fetch` + `AbortController`，零新依赖。
+
+**契约**
+
+```ts
+type ChatRole = 'system' | 'user' | 'assistant';
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'low'|'high'|'auto' } };
+interface ChatMessage { role: ChatRole; content: string | ContentPart[]; }
+interface ChatRequest {
+  messages: ChatMessage[];
+  provider?: string;        // 缺省 cfg.llm.default
+  model?: string;           // 覆盖 provider.model
+  temperature?: number; topP?: number; maxTokens?: number;
+  signal?: AbortSignal;
+}
+interface ChatResponse {
+  content: string; model: string; provider: string;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  finishReason?: string;
+}
+class LlmError extends Error {
+  code: 'NOT_CONFIGURED' | 'PROVIDER_NOT_FOUND' | 'TIMEOUT' | 'HTTP' | 'PARSE' | 'NETWORK';
+  httpStatus?: number;
+}
+```
+
+**配置**：`cfg.llm`（可选）见 §3.4。多 provider 命名表，`default` 必须存在于 `providers` 中（zod refine 校验）。每次 `chat()` 现读 `cfg()`，热加载即时生效。
+
+**错误模型**：`chat()` 失败统一抛 `LlmError`。Handler 可针对 `code` 给用户友好提示，或不 catch 让 dispatch 兜底回 "命令执行失败"。
+
+**日志规则（强约束）**：
+
+- ✅ 记元数据：`{ provider, model, latencyMs, msgCount, promptTokens, completionTokens, finishReason }`。
+- ❌ 绝不记：`messages` 内容（含图片 URL）、响应文本、`apiKey`、完整响应 body。
+- HTTP 4xx/5xx 错误的 body snippet（≤500 字节）只进 `debug` 级别，避免上游回显密钥时漏到 info。
+
+**不做（v1）**：流式 / 重试 / 缓存 / prompt 模板 / 对话历史 / 多目标语言。需要时由调用方 handler 自己实现，或后续按需扩展底层。
 
 ---
 

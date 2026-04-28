@@ -5,6 +5,7 @@ import type {
   PrivateMessageEvent,
   Segment,
 } from '../events/schema.js';
+import type { LlmClient } from '../llm/api.js';
 
 export type CommandEvent = PrivateMessageEvent | GroupMessageEvent;
 
@@ -22,6 +23,13 @@ export interface CommandContext {
    * reaching into the registry directly. Treat as read-only.
    */
   listCommands(): readonly CommandHandler[];
+  /**
+   * Shared OpenAI-compatible LLM client. Always present; throws
+   * `LlmError('NOT_CONFIGURED')` from `chat()` if `cfg.llm` is missing.
+   * Bot stays strictly command-driven — handlers decide when (and whether)
+   * to call out to an LLM. Never expose direct user→LLM dialogue.
+   */
+  llm: LlmClient;
 }
 
 export type CommandScope = 'private' | 'group' | 'both';

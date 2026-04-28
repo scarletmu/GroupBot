@@ -1,5 +1,24 @@
 import { z } from 'zod';
 
+const LlmProviderSchema = z.object({
+  baseUrl: z.string().url(),
+  apiKey: z.string().min(1),
+  model: z.string().min(1),
+  timeout: z.number().int().min(1000).default(30000),
+  maxTokens: z.number().int().min(1).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+const LlmConfigSchema = z
+  .object({
+    default: z.string().min(1).optional(),
+    providers: z.record(z.string().min(1), LlmProviderSchema).default({}),
+  })
+  .refine(
+    (v) => !v.default || Object.prototype.hasOwnProperty.call(v.providers, v.default),
+    { message: 'llm.default must reference an entry in llm.providers' },
+  );
+
 export const BotConfigSchema = z.object({
   listen: z.object({
     host: z.string().min(1),
@@ -25,6 +44,8 @@ export const BotConfigSchema = z.object({
       dir: z.string().optional(),
     })
     .default({ level: 'info' }),
+  llm: LlmConfigSchema.optional(),
 });
 
 export type BotConfig = z.infer<typeof BotConfigSchema>;
+export type LlmProviderConfig = z.infer<typeof LlmProviderSchema>;

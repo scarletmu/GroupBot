@@ -1,91 +1,65 @@
-# QQBot
+# QQBot — agent guide
 
-Command-only QQ bot, runs as a NapCatQQ (OneBot 11) reverse-WS client.
-
-**Source of truth:** [`docs/DESIGN.md`](./docs/DESIGN.md). This file is operational guidance only — do not duplicate the design. If a change conflicts with DESIGN.md, surface it before coding.
+Command-only QQ bot, runs as a NapCatQQ (OneBot 11) reverse-WS client. This file is your index. Read only the relevant doc — don't sweep the tree.
 
 ## Boundaries
 
 - This repo: `/Users/wang/Documents/Dev/IM/QQBot`.
 - `../NapCatQQ/` is upstream — **read-only reference**, never modify.
 - NapCat's `onebot11_<uin>.json` is user-managed via WebUI. Don't touch it.
+- Commit only when asked. Never push unprompted.
 
-## Stack (locked)
+## Doc tiers
 
-- TypeScript + Node ≥ 20, ESM, pnpm.
-- No framework (NoneBot/Koishi forbidden), no DB, no HTTP callback, no Forward WS.
-- Self-rolled `ws-server` + `ob11-client` + `zod`. Don't pull community OneBot libs.
-- Single config file: `config/bot.json5` (hot-reload semantics in DESIGN.md §3.4).
+Documents in this repo are split into three tiers. **Only Tier 1 is for you.** The others exist for humans or as frozen history; do not read them on your own.
 
-## Expected layout
+### Tier 1 — for the agent (read these)
 
-```
-QQBot/
-├── CLAUDE.md
-├── README.md                ← user-facing: setup / run / add command / config
-├── package.json
-├── tsconfig.json
-├── docs/DESIGN.md
-├── config/bot.json5
-├── src/
-│   ├── index.ts             ← wire-up + start
-│   ├── transport/
-│   │   ├── ws-server.ts     ← reverse WS, token check, heartbeat
-│   │   └── ob11-client.ts   ← API calls, echo correlation
-│   ├── events/
-│   │   ├── schema.ts        ← zod: MessageEvent / Segment union
-│   │   └── parse.ts
-│   ├── router/
-│   │   ├── trigger.ts       ← private `/`, group at-self + `/`
-│   │   ├── parse-cmd.ts     ← shell-like argv split
-│   │   └── dispatch.ts      ← lookup + error guard + rate limit
-│   ├── plugins/
-│   │   ├── registry.ts      ← chokidar hot-reload of commands/
-│   │   └── api.ts           ← CommandHandler / CommandContext
-│   ├── config/
-│   │   ├── schema.ts
-│   │   └── loader.ts        ← reload + rollback on validation fail
-│   └── commands/            ← one file per command
-│       └── help.ts
-└── logs/                    ← pino output, gitignored
-```
+English, terse, kept current. Pick the right one from the table below and read only that.
 
-Don't put files outside this tree without asking.
+| If you're about to … | Read |
+|---|---|
+| Touch `transport/`, `events/`, `router/`, `plugins/registry`, or change data flow | [docs/architecture.md](./docs/architecture.md) |
+| Touch trigger logic in `router/trigger.ts` | [docs/architecture.md#trigger-rules](./docs/architecture.md#trigger-rules) — then run `pnpm smoke` |
+| Change `config/bot.json5` shape, hot-reload semantics, or `src/config/schema.ts` | [docs/config.md](./docs/config.md) |
+| Add a command, change `CommandHandler` / `CommandContext`, or use `ctx.llm` | [docs/plugins.md](./docs/plugins.md) |
+| Change behavior covered by AC-1…AC-15, or update the smoke harness | [docs/acceptance.md](./docs/acceptance.md) |
 
-## Command contract
+When you change a contract or config shape, update the matching Tier-1 doc in the same change.
 
-- Add `src/commands/xxx.ts`, `export default` a `CommandHandler` (DESIGN.md §3.5). Done.
-- Never edit `src/index.ts` or `router/*` to register a command — that's AC-11.
-- In handlers: use `ctx.reply` only (no direct client calls); don't throw past dispatch; no global state outside `ctx`.
-- `description` and `usage` are mandatory (rendered by `/help`).
+### Tier 2 — for humans (do not read on your own)
 
-## Trigger rules (easy to break, test every time)
+Chinese, detailed, written for the operator/maintainer. **Don't open these proactively.** If the user's request is about installing, running, browsing the project, or drafting a feature proposal, point them at the file instead of reading it yourself. Read only if the user explicitly directs you to.
 
-Anything not matching must be **fully silent** (debug log only, never info). See DESIGN.md §3.3.
+- `README.md` — 项目简介，给浏览仓库的人看的。
+- `QUICKSTART.md` — 上手手册，给运维/部署者看的。
+- `ARCHITECTURE.md` — 中文版架构详解，写给想理解系统怎么运转的人。和 `docs/architecture.md` 覆盖同样事实但更长更"为什么"。**你需要的事实在 `docs/architecture.md` 里，别读这份。**
+- `docs/plans/` — 给人类起草新功能提案的目录；用户决定要建时再让你看具体某个文件。
 
-- Private: `message_type==='private'` && first text segment starts with `cfg.prefix`.
-- Group: `message_type==='group'` && `group_id ∈ cfg.allowedGroups` && segments contain `{type:'at', data:{qq: cfg.selfId}}` && first text **after stripping at** starts with `cfg.prefix`.
-- Always re-run AC-3 / AC-6 / AC-7 / AC-8 after touching trigger logic.
+### Tier 3 — archive (do not read)
 
-## Logging & safety
+`docs/archive/` 是冻结历史。Nobody reads it during normal work — not you, not the user. It exists so prior decisions and session logs aren't lost. Only touch it if the user explicitly asks "look up the original X", and even then read only the named file.
 
-- `pino` JSON; `pino-pretty` in dev.
-- One structured line per trigger: `ts, source, userId, groupId?, cmd, argv.length, latencyMs, ok`.
-- **Never log:** WS token, full message body, user content. Only `message_id` + `cmd` + metadata.
-- Handler throw → dispatch catches → reply "命令执行失败", stack to error log, no internals leaked.
+## Hard rules (don't break)
+
+- **Trigger silence:** anything not matching the rules in `architecture.md#trigger-rules` is fully silent (debug log only, never info). Re-run AC-3 / AC-6 / AC-7 / AC-8 after touching trigger logic. `pnpm smoke` covers them.
+- **Add commands by file only:** never edit `src/index.ts` or `src/router/*` to register a command. That's AC-11.
+- **No direct user↔LLM dialogue:** the bot is `/<cmd>`-driven. LLM is plumbing for handler authors via `ctx.llm`. No `/ask`, no `/chat`. Bounded tool commands like `/translate` are fine.
+- **Logging:** never log WS token, full message body, user content, `apiKey`, or image URLs. LLM info logs carry only `{ provider, model, latencyMs, msgCount, tokens, finishReason }`. Handler errors → `命令执行失败` to the user, stack to error log, no internals leaked.
+- **Stack is locked:** no NoneBot/Koishi/openai-SDK/axios. See `architecture.md#locked-decisions--out-of-scope`.
 
 ## Workflow
 
-- Read the relevant DESIGN.md section before editing. Update README.md when user-facing behavior changes; update `config/schema.ts` + DESIGN.md §3.4 when config shape changes.
-- New concept with no existing doc home → **ask the user** where it goes. Don't invent top-level docs.
-- Style: edit over create; no speculative abstraction; validate at boundaries only; no comments unless the *why* is non-obvious.
-- After each change, self-check the relevant AC cases in DESIGN.md §4.4. P0 cases (AC-1/2/3/5/6/7/8/11) must all pass. `pnpm smoke` runs an automated harness covering AC-2/3/4/5/6/7/8/9/10/11/12/13/14 against a freshly booted bot — re-run it after any change to transport, router, or plugin code.
-- Commit only when asked. Never push unprompted.
+- Pick the right Tier-1 doc, read only that section, then edit.
+- After any change to `transport/` / `router/` / `plugins/` / `config/` / `events/`: `pnpm typecheck` and `pnpm smoke` (expect 13/13).
+- New concept with no existing Tier-1 home → ask the user where it goes; don't invent a new top-level doc.
+- Style: edit over create; no speculative abstraction; validate at boundaries only; comments only when the *why* is non-obvious.
+- If you find Tier-1 and code disagree, surface it before silently diverging.
 
 ## Current state
 
-P0 + P1 scaffold landed: `transport/ws-server` (token check + heartbeat), `transport/ob11-client` (echo correlation), `events/` zod schemas, `router/` (trigger / parse-cmd / dispatch + token-bucket rate limit + handler error guard), `plugins/registry` (chokidar hot-reload via `?v=Date.now()` cache busting), `config/loader` (JSON5 + chokidar + rollback), `commands/help.ts`, `index.ts`, `README.md`. `pnpm typecheck` is clean.
+P0+P1 plus LLM shared client are landed. Verified via `pnpm smoke` (13/13) and synthetic OB11 frames; AC-15 (24h soak) and full round-trip against a real NapCat client are not yet automated.
 
-Verified end-to-end against synthetic OB11 frames over the real reverse-WS: AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-13, AC-14. **Not yet verified** against a real NapCat: AC-15 (24h soak) and the round-trip over an actual NapCat reverse-WS client.
+Active commands: `/help`, `/translate` (text + multimodal, requires `cfg.llm`).
 
-Contract delta from DESIGN.md §3.5: `CommandContext` now has `listCommands(): readonly CommandHandler[]` so the built-in `/help` doesn't reach into the registry directly. Reflected in `docs/DESIGN.md` §3.5.
+`CommandContext` surface: `event`, `argv`, `reply`, `log`, `cfg`, `listCommands()`, `llm`.

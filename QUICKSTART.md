@@ -45,7 +45,13 @@ pnpm install
 
 ## 2. 改 QQBot 自己的配置
 
-编辑 `config/bot.json5`：
+仓库里只提交了模板 `config/bot.example.json5`，运行用的 `config/bot.json5` 已 gitignored。第一次先复制一份：
+
+```bash
+cp config/bot.example.json5 config/bot.json5
+```
+
+然后编辑 `config/bot.json5`：
 
 ```json5
 {

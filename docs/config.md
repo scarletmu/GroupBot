@@ -1,6 +1,6 @@
 # Configuration
 
-Single source of config: `config/bot.json5`. Validated by zod (`src/config/schema.ts`). Loaded and watched by `src/config/loader.ts` — file changes are picked up by chokidar (debounce 100ms), reparsed, and on validation failure the previous config is kept.
+Single source of config: `config/bot.json5`. The committed template is `config/bot.example.json5`; `bot.json5` is gitignored and must be created by copying the example (`cp config/bot.example.json5 config/bot.json5`). Validated by zod (`src/config/schema.ts`). Loaded and watched by `src/config/loader.ts` — file changes are picked up by chokidar (debounce 100ms), reparsed, and on validation failure the previous config is kept.
 
 ## Schema
 

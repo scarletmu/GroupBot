@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'pino';
-import type { ApiResponse, Segment } from '../events/schema.js';
+import { SegmentSchema, type ApiResponse, type Segment } from '../events/schema.js';
 import type { ReverseWsServer } from './ws-server.js';
 
 const API_TIMEOUT_MS = 10_000;
@@ -9,6 +9,12 @@ interface Pending {
   resolve(r: ApiResponse): void;
   reject(err: Error): void;
   timer: NodeJS.Timeout;
+}
+
+export interface OneBotMessage {
+  message_id?: number | string;
+  message: Segment[];
+  raw_message?: string;
 }
 
 export class Ob11Client {
@@ -35,6 +41,22 @@ export class Ob11Client {
 
   async sendGroupMsg(groupId: number, message: Segment[]): Promise<ApiResponse> {
     return this.call('send_group_msg', { group_id: groupId, message });
+  }
+
+  async getMessage(messageId: number | string): Promise<OneBotMessage | null> {
+    const resp = await this.call('get_msg', { message_id: messageId });
+    if (resp.status !== 'ok' && resp.retcode !== 0) return null;
+    if (!resp.data || typeof resp.data !== 'object') return null;
+    const data = resp.data as Record<string, unknown>;
+    const message = SegmentSchema.array().safeParse(data.message);
+    if (!message.success) return null;
+    return {
+      message_id: typeof data.message_id === 'number' || typeof data.message_id === 'string'
+        ? data.message_id
+        : undefined,
+      message: message.data,
+      raw_message: typeof data.raw_message === 'string' ? data.raw_message : undefined,
+    };
   }
 
   private call(action: string, params: Record<string, unknown>): Promise<ApiResponse> {

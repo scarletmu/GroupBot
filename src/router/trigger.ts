@@ -19,10 +19,11 @@ export function evaluatePrivate(
   const firstText = firstTextSegment(ev.message);
   if (!firstText) return { triggered: false, reason: 'no leading text segment' };
   const text = firstText.data.text.trimStart();
-  if (!text.startsWith(cfg.prefix)) {
+  const commandText = stripCommandPrefix(text, cfg.prefix);
+  if (commandText === null) {
     return { triggered: false, reason: 'no prefix' };
   }
-  return { triggered: true, commandText: text.slice(cfg.prefix.length), segmentsAfterAt: ev.message };
+  return { triggered: true, commandText, segmentsAfterAt: ev.message };
 }
 
 export function evaluateGroup(
@@ -42,13 +43,20 @@ export function evaluateGroup(
   const firstText = firstTextSegment(stripped);
   if (!firstText) return { triggered: false, reason: 'no leading text after at' };
   const text = firstText.data.text.trimStart();
-  if (!text.startsWith(cfg.prefix)) return { triggered: false, reason: 'no prefix' };
+  const commandText = stripCommandPrefix(text, cfg.prefix);
+  if (commandText === null) return { triggered: false, reason: 'no prefix' };
 
   return {
     triggered: true,
-    commandText: text.slice(cfg.prefix.length),
+    commandText,
     segmentsAfterAt: stripped,
   };
+}
+
+function stripCommandPrefix(text: string, prefix: string): string | null {
+  if (text.startsWith(prefix)) return text.slice(prefix.length);
+  if (prefix === '/' && text.startsWith('／')) return text.slice('／'.length);
+  return null;
 }
 
 function firstTextSegment(

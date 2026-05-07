@@ -23,6 +23,10 @@ const image: CommandHandler = {
     inflight.add(userId);
 
     try {
+      void ctx.reply('已收到，正在生成图片，请稍候…').catch((err: unknown) => {
+        ctx.log.warn({ err: errorMessage(err) }, 'image ack reply failed');
+      });
+
       const r = await ctx.llm.image({ prompt });
       const first = r.images[0];
       if (!first) {
@@ -34,7 +38,18 @@ const image: CommandHandler = {
         await ctx.reply('生图失败：模型未返回图像');
         return;
       }
-      await ctx.reply([{ type: 'image', data: { file } }]);
+      try {
+        await ctx.reply([{ type: 'image', data: { file } }]);
+      } catch (err) {
+        if (isOneBotSendTimeout(err)) {
+          ctx.log.warn(
+            { err: errorMessage(err) },
+            'image reply send timed out; NapCat may still deliver the image',
+          );
+          return;
+        }
+        throw err;
+      }
     } catch (err) {
       if (err instanceof LlmError) {
         if (err.code === 'NOT_CONFIGURED') {
@@ -52,5 +67,16 @@ const image: CommandHandler = {
     }
   },
 };
+
+function isOneBotSendTimeout(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    /^api send_(private|group)_msg timed out after \d+ms$/.test(err.message)
+  );
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 export default image;

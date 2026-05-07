@@ -73,6 +73,8 @@ The bot replies in **only** these two cases. Everything else is silent (debug lo
 - **Private:** `message_type === 'private'` AND first text segment starts with `cfg.prefix`.
 - **Group:** `message_type === 'group'` AND `group_id ∈ cfg.allowedGroups` AND segments contain `{ type: 'at', data: { qq: cfg.selfId } }` AND, after stripping `reply` + `at` + adjacent whitespace, the first remaining text starts with `cfg.prefix`.
 
+When `cfg.prefix` is `/`, the fullwidth slash `／` is accepted as an alias for all commands. This only aliases the prefix; command names and group at-self requirements are unchanged.
+
 The strip order in `router/trigger.ts::stripLeadingAtAndReply`:
 1. Drop leading `reply` segment (QQ clients prepend it on quoted replies).
 2. Drop the first `at` segment with `qq === selfId`.

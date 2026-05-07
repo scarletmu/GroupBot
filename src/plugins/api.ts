@@ -7,6 +7,7 @@ import type {
 } from '../events/schema.js';
 import type { LlmClient } from '../llm/api.js';
 import type { HistoryReader } from '../history/store.js';
+import type { OneBotMessage } from '../transport/ob11-client.js';
 
 export type CommandEvent = PrivateMessageEvent | GroupMessageEvent;
 
@@ -16,6 +17,9 @@ export interface CommandContext {
   event: CommandEvent;
   argv: string[];
   reply(content: ReplyContent): Promise<void>;
+  onebot: {
+    getMessage(messageId: number | string): Promise<OneBotMessage | null>;
+  };
   log: Logger;
   cfg: BotConfig;
   /**

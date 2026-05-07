@@ -78,6 +78,8 @@ async function main() {
 
   await acGroupAtPlusCmd();
   await acGroupAtNoCmd();
+  await acGroupQuotedTranslateNoLlm();
+  await acFullwidthSlashPrefix();
 
   await acHotAddCommand();
 
@@ -105,7 +107,14 @@ async function connect() {
   ws.on('message', (raw) => {
     const obj = JSON.parse(raw.toString());
     recvBuf.push(obj);
-    ws.send(JSON.stringify({ status: 'ok', retcode: 0, data: { message_id: 999 }, echo: obj.echo }));
+    const data = obj.action === 'get_msg'
+      ? {
+          message_id: obj.params.message_id,
+          message: [{ type: 'text', data: { text: 'Hello from quoted message' } }],
+          raw_message: 'Hello from quoted message',
+        }
+      : { message_id: 999 };
+    ws.send(JSON.stringify({ status: 'ok', retcode: 0, data, echo: obj.echo }));
   });
   await new Promise((res, rej) => {
     ws.once('open', res);
@@ -206,6 +215,46 @@ async function acGroupAtNoCmd() {
     message: [{ type: 'at', data: { qq: String(SELF_ID) } }, { type: 'text', data: { text: ' 在吗' } }],
   }));
   record('AC-6 group at-only silent', replies.length === 0);
+}
+
+async function acGroupQuotedTranslateNoLlm() {
+  const replies = await send(frame({
+    message_type: 'group', group_id: ALLOWED_GROUP,
+    message: [
+      { type: 'reply', data: { id: 4242 } },
+      { type: 'at', data: { qq: String(SELF_ID) } },
+      { type: 'text', data: { text: ' /translate' } },
+    ],
+  }), 500);
+  const ok =
+    replies.length === 3 &&
+    replies[0].action === 'send_group_msg' &&
+    replies[0].params.message[0].data.text.includes('已收到') &&
+    replies[1].action === 'get_msg' &&
+    replies[1].params.message_id === 4242 &&
+    replies[2].action === 'send_group_msg' &&
+    replies[2].params.message[0].data.text.includes('翻译功能未配置');
+  record('translate quoted message fetches source', ok);
+}
+
+async function acFullwidthSlashPrefix() {
+  const privateReplies = await send(frame({
+    user_id: 556,
+    message_type: 'private', sub_type: 'friend',
+    message: [{ type: 'text', data: { text: '／help' } }],
+  }));
+  const groupReplies = await send(frame({
+    user_id: 557,
+    message_type: 'group', group_id: ALLOWED_GROUP,
+    message: [{ type: 'at', data: { qq: String(SELF_ID) } }, { type: 'text', data: { text: ' ／help' } }],
+  }));
+  record(
+    'fullwidth slash prefix',
+    privateReplies.length === 1 &&
+      privateReplies[0].action === 'send_private_msg' &&
+      groupReplies.length === 1 &&
+      groupReplies[0].action === 'send_group_msg',
+  );
 }
 
 async function acHotAddCommand() {

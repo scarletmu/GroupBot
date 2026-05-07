@@ -94,6 +94,9 @@ export class Dispatcher {
       event: ev,
       argv: parsed.argv,
       reply: (content) => this.reply(ev, content),
+      onebot: {
+        getMessage: (messageId) => this.client.getMessage(messageId),
+      },
       log: this.log.child({ cmd: handler.name }),
       cfg,
       listCommands: () => this.registry.list(),

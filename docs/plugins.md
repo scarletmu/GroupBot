@@ -24,6 +24,9 @@ export interface CommandContext {
   event: PrivateMessageEvent | GroupMessageEvent;
   argv: string[];                          // shell-style tokens after the cmd name
   reply(content: string | Segment[]): Promise<void>;
+  onebot: {
+    getMessage(messageId: number | string): Promise<OneBotMessage | null>;
+  };
   log: pino.Logger;                        // child logger, scoped { cmd }
   cfg: BotConfig;                          // live snapshot at trigger time
   listCommands(): readonly CommandHandler[];  // for /help; treat as read-only
@@ -42,6 +45,7 @@ interface HistoryReader {
 ```
 
 - `ctx.reply` routes to private or group automatically based on `event.message_type`.
+- `ctx.onebot.getMessage` calls OneBot `get_msg` for targeted reads such as quoted-message commands. It returns `null` on non-ok or malformed responses.
 - `ctx.cfg` is the live config snapshot at the moment the trigger fired. If the user edits the config mid-handler, you keep your snapshot — that's intentional.
 - Throwing inside `handle` is fine. Dispatch catches, replies `命令执行失败`, logs the stack at error level. The process keeps running (AC-13).
 - `ctx.history` is `undefined` when `cfg.history` is not configured. Built-in `/summary` is currently the only consumer; if you add another handler that depends on it, replicate the friendly "未配置" reply path rather than throwing.
@@ -224,9 +228,9 @@ If you write your own LLM-using handler, follow the same rule: log shape, not su
 ## Built-in commands
 
 - **`/help`** — list registered commands (name + usage + description).
-- **`/translate <text>`** — translate text to Chinese via the configured LLM.
-- **`/translate`** (with image segments attached) — translate text content of those images to Chinese (requires a vision-capable model). Combined `/translate <text>` + image is also supported.
-- **`/image <prompt>`** — generate an image via the configured image model and reply with it. Sends `base64://` segment when the upstream returns `b64_json`, otherwise falls back to URL. Per-user concurrency cap of 1: while one `/image` from a given QQ user is in flight, further `/image` from that same user (in any chat) replies `正在生成图片，请稍候…` until the first call resolves. Lock is in-memory and per-process; it auto-releases on success, error, or timeout via `finally`.
+- **`/translate <text>`** — translate text to Chinese via the configured LLM. For a valid request it immediately replies `已收到，正在翻译，请稍候…`, then sends the translated text when ready.
+- **`/translate`** (with image segments attached or a quoted message) — translate text/image content to Chinese (requires the configured chat model to support vision for images). The bot fetches image URLs locally and sends them to the LLM as in-memory `data:` URLs so the provider does not need direct access to QQ/NapCat temporary links. Combined `/translate <text>` + image is also supported. If the command was sent as a quoted reply, the final translation quotes that source message with a `reply` segment and does not add an `at` segment for the original sender. LLM timeout replies `翻译请求超时，请稍后再试`.
+- **`/image <prompt>`** — generate an image via the configured image model and reply with it. For a valid request it immediately replies `已收到，正在生成图片，请稍候…`, then sends the image when ready. Sends `base64://` segment when the upstream returns `b64_json`, otherwise falls back to URL. If the final OneBot send API times out waiting for NapCat's echo, `/image` logs a warn and does not add `命令执行失败`, because NapCat may still deliver the image. Per-user concurrency cap of 1: while one `/image` from a given QQ user is in flight, further `/image` from that same user (in any chat) replies `正在生成图片，请稍候…` until the first call resolves. Lock is in-memory and per-process; it auto-releases on success, error, or timeout via `finally`.
 - **`/summary [range]`** — summarize recent group chat via the configured chat model. Group-only. `range` is one of: empty (default 1h), duration string `30m` / `2h` / `1h30m`, or a bare integer `200` interpreted as last-N messages. Output starts with a `（区间过大，仅总结最新 N 条）` notice if the request was capped at `cfg.history.maxMessagesPerSummary`. Per-group concurrency cap of 1: while one `/summary` is in flight in a group, further `/summary` calls in *that group* reply `正在总结，请稍候…` until the first resolves. Different groups are independent.
 
 `/translate` requires `cfg.llm`; otherwise it replies `翻译功能未配置（管理员需在 bot.json5 设置 llm）`.

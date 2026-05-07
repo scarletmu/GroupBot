@@ -7,10 +7,10 @@ The cases the bot must pass. ✅ = should reply, 🚫 = should not reply.
 | # | Scenario | Action | Expected | Smoke |
 |---|---|---|---|---|
 | AC-1  | Reverse WS connect | NapCat dials `ws://127.0.0.1:6700` | bot logs `client connected uin=…`; NapCat side shows connected | implicit (smoke connect must succeed) |
-| AC-2  | Private positive | Send `/help` to bot in private | ✅ command list | ✅ |
+| AC-2  | Private positive | Send `/help` to bot in private | ✅ command list; `／help` also works when `prefix` is `/` | ✅ |
 | AC-3  | Private chitchat | Send `你好` in private | 🚫 fully silent (debug log only) | ✅ |
 | AC-4  | Unknown command | Send `/foo` in private | ✅ `未知命令，/help 查看` | ✅ |
-| AC-5  | Group at + cmd | In whitelisted group: `@bot /help` | ✅ command list in group | ✅ |
+| AC-5  | Group at + cmd | In whitelisted group: `@bot /help` | ✅ command list in group; `@bot ／help` also works when `prefix` is `/` | ✅ |
 | AC-6  | Group at-only | In whitelisted group: `@bot 在吗` | 🚫 silent | ✅ |
 | AC-7  | Group cmd no at | In whitelisted group: `/help` (no at) | 🚫 silent | ✅ |
 | AC-8  | Non-whitelisted group | Group not in `allowedGroups`: `@bot /help` | 🚫 silent | ✅ |
@@ -32,7 +32,7 @@ The cases the bot must pass. ✅ = should reply, 🚫 = should not reply.
 
 ## smoke harness
 
-`scripts/smoke.mjs` runs 13/14 of the functional cases against a freshly booted bot:
+`scripts/smoke.mjs` runs the functional smoke cases against a freshly booted bot:
 
 1. Writes a temp `bot.json5` (random port, random token).
 2. Spawns `node --import tsx src/index.ts`, waits for `qqbot ready`.
@@ -54,21 +54,23 @@ None of these are in the AC table — all three depend on an external LLM API an
 ### `/translate`
 
 1. Configure a real provider in `cfg.llm`.
-2. Private `/translate Hello, how are you?` → expect Chinese reply.
-3. Private `/translate` with an image of foreign-language text → expect Chinese reply (provider/model must support vision).
-4. With `cfg.llm` removed → expect `翻译功能未配置（管理员需在 bot.json5 设置 llm）`.
-5. With wrong `apiKey` → expect `命令执行失败`, error log shows `LlmError('HTTP', ..., 401)`, **no** apiKey in any log.
+2. Private `/translate Hello, how are you?` → expect immediate `已收到，正在翻译，请稍候…`, then Chinese reply.
+3. Private `/translate` with an image of foreign-language text → expect immediate confirmation, then Chinese reply (the configured chat model must support vision). The bot fetches the image locally and sends an in-memory `data:` URL to the LLM; if local fetch fails, expect `图片读取失败，请稍后再试`. If the LLM request itself times out, expect `翻译请求超时，请稍后再试`.
+4. Group quoted message + `@bot /translate` → expect immediate confirmation, then Chinese translation of the quoted message text/image. The final translation message starts with a `reply` segment referencing the quoted message ID and must not include an `at` segment for the quoted message's original sender.
+5. With `cfg.llm` removed → expect `翻译功能未配置（管理员需在 bot.json5 设置 llm）`.
+6. With wrong `apiKey` → expect `命令执行失败`, error log shows `LlmError('HTTP', ..., 401)`, **no** apiKey in any log.
 
 ### `/image`
 
 1. Configure a provider with `imageModel` (e.g. `gpt-image-1`) in `cfg.llm`.
-2. Private `/image a sparkling cat` → expect an image reply. Info log: one line `llm image ok` with `{ provider, model, latencyMs, n, hasB64, hasUrl }` — **no** prompt, **no** b64, **no** url.
+2. Private `/image a sparkling cat` → expect immediate `已收到，正在生成图片，请稍候…`, then an image reply. Info log: one line `llm image ok` with `{ provider, model, latencyMs, n, hasB64, hasUrl }` — **no** prompt, **no** b64, **no** url.
 3. Empty argv `/image` → expect `用法：/image <描述>`, no LLM call.
 4. With `cfg.llm` removed → expect `生图功能未配置（管理员需在 bot.json5 设置 llm）`.
 5. With provider missing `imageModel` → expect `生图功能未配置（provider 缺 imageModel）`.
 6. With wrong `apiKey` → expect `命令执行失败`, error log shows `LlmError('HTTP', ..., 401)`, **no** apiKey / b64 / url in any log.
 7. Hot-reload: change `imageModel` while the bot is running → next `/image` uses the new model without restart.
 8. Per-user concurrency cap: send `/image cat`, then within ~1s send `/image dog` from the **same** QQ user (private or any whitelisted group) → second call replies `正在生成图片，请稍候…` and does **not** hit the LLM. After the first call resolves (or errors out), `/image dog` works normally. A different QQ user firing `/image` during the same window is unaffected.
+9. If the final `send_private_msg` / `send_group_msg` API call times out waiting for NapCat's echo but the image is delivered anyway → expect no extra `命令执行失败`; warn log only, with no prompt / b64 / url.
 
 ### `/summary`
 

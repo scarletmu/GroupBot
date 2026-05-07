@@ -35,16 +35,25 @@
   },
 
   // LLM shared client (OpenAI-compatible). Optional. When omitted, any
-  // handler that calls ctx.llm.chat() throws LlmError('NOT_CONFIGURED').
-  // Hot-reloadable: changes to providers / default take effect on next call.
-  // Bot remains command-driven: never expose direct user→LLM dialogue.
+  // handler that calls ctx.llm.chat() / ctx.llm.image() throws
+  // LlmError('NOT_CONFIGURED'). Hot-reloadable: changes to providers /
+  // default / imageDefault take effect on next call. Bot remains
+  // command-driven: never expose direct user→LLM dialogue.
+  //
+  // - `default`      : provider used by chat handlers (e.g. /translate)
+  // - `imageDefault` : provider used by /image (falls back to `default`)
+  // - `model`        : chat model on a provider
+  // - `imageModel`   : image-gen model on a provider; required to enable /image
+  //
   // llm: {
   //   default: "openai",
+  //   // imageDefault: "openai",   // optional; defaults to `default`
   //   providers: {
   //     openai: {
   //       baseUrl: "https://api.openai.com/v1",
   //       apiKey: "sk-...",
-  //       model: "gpt-4o-mini",
+  //       model: "gpt-4o-mini",        // chat
+  //       imageModel: "gpt-image-1",   // image (omit to disable /image)
   //       timeout: 30000,
   //     },
   //     deepseek: {
@@ -53,5 +62,23 @@
   //       model: "deepseek-chat",
   //     },
   //   },
+  // },
+
+  // 群聊历史缓冲；启用后 /summary 命令可用。不配置 = 关闭，
+  // /summary 调用会回复"未配置"。仅缓冲 allowedGroups 内的群聊消息，
+  // 命令消息（@bot 或以 prefix 开头）不进缓冲。
+  // 启用 history 是 user content 持久化的唯一入口，请阅读 docs/architecture.md
+  // 的 "Logging & safety" 章节，确认运维隐私要求后再开启。
+  //
+  // - `dir`                    : JSONL 落盘目录，按天滚动
+  // - `retentionDays`          : 保留天数；过期文件由启动时 + 每小时清理
+  // - `maxMessagesPerSummary`  : 单次 /summary 喂给 LLM 的最大条数
+  //
+  // 启用后请把目录加入 .gitignore（默认 data/ 已忽略）。
+  //
+  // history: {
+  //   dir: "data/history",
+  //   retentionDays: 2,
+  //   maxMessagesPerSummary: 1000,
   // },
 }

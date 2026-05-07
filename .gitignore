@@ -9,6 +9,9 @@ dist/
 logs/
 *.log
 
+# Runtime data (e.g. /summary history JSONL files)
+data/
+
 # Real config — only the template config/bot.example.json5 is committed.
 # Copy it to config/bot.json5 and edit locally.
 config/bot.json5

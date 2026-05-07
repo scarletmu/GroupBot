@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import pino, { multistream, type StreamEntry } from 'pino';
 import { ConfigLoader } from './config/loader.js';
 import { parseFrame } from './events/parse.js';
+import { isLikelyCommand } from './history/format.js';
+import { HistoryStore } from './history/store.js';
 import { createLlmClient } from './llm/client.js';
 import { CommandRegistry } from './plugins/registry.js';
 import { Dispatcher } from './router/dispatch.js';
@@ -47,12 +49,29 @@ async function main(): Promise<void> {
 
   const llm = createLlmClient(() => cfg, log.child({ mod: 'llm' }));
 
+  const historyStore = cfg.history
+    ? new HistoryStore({ dir: cfg.history.dir, log: log.child({ mod: 'history' }) })
+    : undefined;
+  let historyTick: NodeJS.Timeout | undefined;
+  if (historyStore) {
+    await historyStore.cleanupOlderThan(cfg.history!.retentionDays);
+    historyTick = setInterval(() => {
+      const h = cfg.history;
+      if (!h) return;
+      historyStore.cleanupOlderThan(h.retentionDays).catch((err) =>
+        log.warn({ err: String(err) }, 'history cleanup failed'),
+      );
+    }, 3600_000);
+    historyTick.unref();
+  }
+
   const dispatcher = new Dispatcher(
     client,
     registry,
     log.child({ mod: 'dispatch' }),
     () => cfg,
     llm,
+    historyStore,
   );
 
   wss.on('frame', (raw) => {
@@ -64,6 +83,15 @@ async function main(): Promise<void> {
         );
         return;
       case 'group':
+        if (
+          historyStore &&
+          cfg.allowedGroups.includes(f.event.group_id) &&
+          !isLikelyCommand(f.event, cfg.selfId, cfg.prefix)
+        ) {
+          historyStore.append(f.event).catch((err) =>
+            log.warn({ err: String(err) }, 'history append failed'),
+          );
+        }
         dispatcher.handleGroup(f.event).catch((err) =>
           log.error({ err: String(err) }, 'group dispatch failed'),
         );
@@ -99,9 +127,11 @@ async function main(): Promise<void> {
 
   const shutdown = async (sig: string) => {
     log.info({ sig }, 'shutting down');
+    if (historyTick) clearInterval(historyTick);
     await loader.stop();
     await registry.stop();
     await wss.stop();
+    if (historyStore) await historyStore.close();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

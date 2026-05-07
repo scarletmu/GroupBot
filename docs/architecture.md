@@ -38,10 +38,15 @@ src/
 │   └── loader.ts           ← JSON5 + chokidar + rollback on validation fail
 ├── llm/
 │   ├── api.ts              ← shared LLM types + LlmError + LlmClient interface
-│   └── client.ts           ← createLlmClient: built-in fetch, OpenAI-compatible
+│   └── client.ts           ← createLlmClient: built-in fetch, OpenAI-compatible chat + images
+├── history/
+│   ├── store.ts            ← JSONL day-rolled group-message buffer; HistoryStore + HistoryReader
+│   └── format.ts           ← segment→text placeholders, sender name, range arg parser
 └── commands/               ← one file per command, hot-reloaded
     ├── help.ts
-    └── translate.ts
+    ├── translate.ts
+    ├── image.ts
+    └── summary.ts
 ```
 
 `logs/` is gitignored, written by `pino` when `cfg.log.dir` is set. `scripts/smoke.mjs` is the AC harness; not part of the runtime.
@@ -50,13 +55,14 @@ src/
 
 1. NapCat connects to `ws://<listen.host>:<listen.port>`. `ws-server.ts` checks `Authorization: Bearer <token>`. Bad token → HTTP 401, drop. Good token → upgrade, start 30s heartbeat.
 2. NapCat pushes event JSON. `events/parse.ts` runs zod and tags the frame as `private | group | meta | notice | request | api-response | unknown | invalid`. Non-message frames go to debug log; `api-response` is routed back to `ob11-client.ts` via `echo` correlation.
-3. `router/trigger.ts` decides whether the message triggers (see [Trigger rules](#trigger-rules) below). Untriggered → debug log only, **never** info.
-4. `router/parse-cmd.ts` extracts `cmd` (lowercased) and `argv` (shell-style, supports `"quoted"`).
-5. `router/dispatch.ts`:
+3. **History side-effect (group only, optional).** If `cfg.history` is set, the `group` frame's `group_id ∈ cfg.allowedGroups`, and the message does not look like a command (`isLikelyCommand` returns false: no at-self, first text doesn't start with `cfg.prefix`), `historyStore.append(event)` is fired-and-forgotten *before* trigger evaluation. Append failures log at warn and never block dispatch. With `cfg.history` unset (default), this whole step is skipped — no user content touches disk.
+4. `router/trigger.ts` decides whether the message triggers (see [Trigger rules](#trigger-rules) below). Untriggered → debug log only, **never** info.
+5. `router/parse-cmd.ts` extracts `cmd` (lowercased) and `argv` (shell-style, supports `"quoted"`).
+6. `router/dispatch.ts`:
    - Per-user token bucket (default 5 / 10s). First overflow → reply `操作过于频繁`, then silent until window expires.
-   - Lookup in `plugins/registry`. Miss → reply `未知命令，<prefix>help 查看`. Hit → run handler with `CommandContext`.
+   - Lookup in `plugins/registry`. Miss → reply `未知命令，<prefix>help 查看`. Hit → run handler with `CommandContext` (which carries `history?` when `cfg.history` is set).
    - Handler throws → catch, reply `命令执行失败`, log stack at error level. Process never crashes from handler errors.
-6. Handler calls `ctx.reply(...)` → `ob11-client.sendPrivateMsg` / `sendGroupMsg` → OB11 `send_*_msg` over the WS, correlated by `echo`.
+7. Handler calls `ctx.reply(...)` → `ob11-client.sendPrivateMsg` / `sendGroupMsg` → OB11 `send_*_msg` over the WS, correlated by `echo`.
 
 One structured log line per trigger: `{ source, userId, groupId?, cmd, argvLen, latencyMs, ok, mid }`. Never log full message body, user content, or token.
 
@@ -85,7 +91,7 @@ These are intentional and pre-commit guardrails. Don't undo without an explicit 
 - Self-rolled `ws-server` + `ob11-client` + `zod`. No NoneBot2, no Koishi, no community OneBot libs.
 - Reverse WebSocket only. No HTTP callback, no Forward WS.
 - Single config file: `config/bot.json5`. No env-var sprawl.
-- No database. Handlers are stateless; if one needs persistence, that's a deliberate scope expansion.
+- No database. Handlers remain stateless; the only persistent runtime state is the on-disk JSONL buffer under `cfg.history.dir` used by `/summary`. It is opt-in (no default), retention-bounded, and limited to `cfg.allowedGroups`. Adding any other persistence is a deliberate scope expansion — discuss before doing it.
 - LLM access via built-in `fetch` + `AbortController` against OpenAI-compatible endpoints. No `openai` SDK, no `axios`.
 
 **Out of scope**
@@ -93,7 +99,7 @@ These are intentional and pre-commit guardrails. Don't undo without an explicit 
 - Active push, scheduled jobs, subscriptions.
 - Multi-account / multi-instance.
 - Web UI / remote admin panel.
-- Persistent command state.
+- Persistent command state, except for the `cfg.history` JSONL buffer described above. Handlers themselves stay stateless — if a handler wants its own persistence, that's a separate conversation.
 - Rich-media uplink (OCR, voice transcription, etc. — except via LLM multimodal calls handlers initiate themselves).
 - Direct user↔LLM dialogue. The bot is strictly `/<cmd>`-driven; LLM is a tool handlers reach for, not a chat surface. No `/ask`, no `/chat`. See [plugins.md](./plugins.md#llm-shared-client) for the contract.
 
@@ -102,5 +108,6 @@ These are intentional and pre-commit guardrails. Don't undo without an explicit 
 - `pino` JSON in production, `pino-pretty` in dev.
 - One info line per trigger. Errors at error level with stack. LLM HTTP body snippets only at debug.
 - **Never log:** WS token, full message body, user content, `apiKey`, image URLs (treat them as user content).
+- The single exception to "no user content on disk" is `cfg.history.dir`, when explicitly enabled. That directory is the only place the bot persists user messages, and only for `cfg.allowedGroups`, with retention bounded by `cfg.history.retentionDays` (default 2 days). Logs themselves still don't echo message content.
 - LLM call info logs: `{ provider, model, latencyMs, msgCount, promptTokens, completionTokens, finishReason }` only.
 - Handler throw → dispatch catches → user sees `命令执行失败`, no internal details.

@@ -47,12 +47,41 @@ pnpm smoke   # expect: 13/13 passed
 
 Cases not covered by smoke: AC-1 round-trip with a real NapCat (smoke uses synthetic frames), AC-15 (long soak).
 
-## What `/translate` does *not* count toward
+## What `/translate`, `/image`, and `/summary` do *not* count toward
 
-`/translate` is not in the AC table — it depends on an external LLM API and isn't reproducible in CI-style smoke runs. Treat it as a manual feature test:
+None of these are in the AC table — all three depend on an external LLM API and aren't reproducible in CI-style smoke runs. Treat them as manual feature tests.
+
+### `/translate`
 
 1. Configure a real provider in `cfg.llm`.
 2. Private `/translate Hello, how are you?` → expect Chinese reply.
 3. Private `/translate` with an image of foreign-language text → expect Chinese reply (provider/model must support vision).
 4. With `cfg.llm` removed → expect `翻译功能未配置（管理员需在 bot.json5 设置 llm）`.
 5. With wrong `apiKey` → expect `命令执行失败`, error log shows `LlmError('HTTP', ..., 401)`, **no** apiKey in any log.
+
+### `/image`
+
+1. Configure a provider with `imageModel` (e.g. `gpt-image-1`) in `cfg.llm`.
+2. Private `/image a sparkling cat` → expect an image reply. Info log: one line `llm image ok` with `{ provider, model, latencyMs, n, hasB64, hasUrl }` — **no** prompt, **no** b64, **no** url.
+3. Empty argv `/image` → expect `用法：/image <描述>`, no LLM call.
+4. With `cfg.llm` removed → expect `生图功能未配置（管理员需在 bot.json5 设置 llm）`.
+5. With provider missing `imageModel` → expect `生图功能未配置（provider 缺 imageModel）`.
+6. With wrong `apiKey` → expect `命令执行失败`, error log shows `LlmError('HTTP', ..., 401)`, **no** apiKey / b64 / url in any log.
+7. Hot-reload: change `imageModel` while the bot is running → next `/image` uses the new model without restart.
+8. Per-user concurrency cap: send `/image cat`, then within ~1s send `/image dog` from the **same** QQ user (private or any whitelisted group) → second call replies `正在生成图片，请稍候…` and does **not** hit the LLM. After the first call resolves (or errors out), `/image dog` works normally. A different QQ user firing `/image` during the same window is unaffected.
+
+### `/summary`
+
+1. Configure both `cfg.llm` and `cfg.history`. In a whitelisted group, send 5–10 ordinary messages (text + image + at).
+2. `@bot /summary` (no arg) → expect a Chinese summary covering the last 1h. The LLM input format includes `[HH:MM] 昵称: 文本` per line, with `[图片]` placeholders for images and `@昵称` placeholders for at-segments.
+3. `@bot /summary 30m` → restricts to the last 30 minutes.
+4. `@bot /summary 200` (bare integer) → last 200 messages instead of duration.
+5. `@bot /summary 99h99m` (no clear meaning past 24h, but format is valid) → still parses; if no history exists in that range, replies `该时间段没有可总结的消息`.
+6. `@bot /summary abc` → replies `用法：/summary [1h|30m|200]`.
+7. With `cfg.history` removed → expect `总结功能未配置（管理员需在 bot.json5 设置 history）`.
+8. With `cfg.llm` removed → expect `总结功能未配置（管理员需在 bot.json5 设置 llm）` (only after history check passes).
+9. Send `/summary` in private chat → expect `总结功能仅在群聊中可用`.
+10. In a non-whitelisted group, send `@bot /summary` → silent (group whitelist gate fires before the handler), and the message itself is **not** buffered.
+11. Per-group concurrency cap: in the same group, fire two `/summary` calls within ~1s → second replies `正在总结，请稍候…` and does **not** hit the LLM. Two `/summary` in *different* groups simultaneously both proceed.
+12. Privacy spot-check: with `cfg.history` unset, no `data/history/` directory is created and no JSONL files appear, even after group traffic. With it set, command-shaped messages (at-self, or first text starts with `prefix`) are excluded from the JSONL.
+13. Retention: after letting the bot run across midnight, day-old files are kept; files older than `retentionDays` are deleted by the hourly cleanup tick (or at next startup).

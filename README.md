@@ -15,7 +15,7 @@
 
 - 路由 `/<cmd>` 命令到对应的 handler。新增命令 = 在 `src/commands/` 加一个 `.ts` 文件，runtime 自动热加载，**不需要重启进程**。
 - 多账号能力靠你跑多个 NapCat 实例 + 多个 QQBot 实例，本项目本身只对应一个 QQ 号。
-- 内置一层 OpenAI 兼容的 LLM 调用客户端（`ctx.llm.chat(...)`），任何 handler 都可以调用——但用户不会跟 LLM 直接对话，所有 LLM 能力必须以"具体命令"的形式包装出来（比如下面的 `/translate`）。
+- 内置一层 OpenAI 兼容的 LLM 调用客户端（`ctx.llm.chat(...)` 与 `ctx.llm.image(...)`），任何 handler 都可以调用——但用户不会跟 LLM 直接对话，所有 LLM 能力必须以"具体命令"的形式包装出来（比如下面的 `/translate`、`/image`）。
 - 配置（白名单、限流、前缀、LLM provider 等）写在单一一份 `config/bot.json5` 里，大部分字段改完保存即时生效。
 
 ## 已自带的命令
@@ -23,13 +23,15 @@
 - `/help` — 列出所有已注册命令。
 - `/translate <文本>` — 把文本翻译成中文，调用配置的 LLM。
 - `/translate`（同时附带图片） — 把图片里的外文文字翻译成中文，需要支持视觉的 LLM 模型。也支持 `/translate <文本>` + 图片同时给。
+- `/image <描述>` — 调用配置的图像模型生图并把图发回当前会话。需要在 LLM provider 上配 `imageModel`（如 `gpt-image-1`）。同一 QQ 用户同时只能有一张图在生成中，未完成前再次 `/image` 会被回 `正在生成图片，请稍候…`。
+- `/summary [区间]` — 总结最近一段时间的群聊内容，仅群聊可用。区间留空 = 最近 1 小时；`30m` / `2h` / `1h30m` 按时长；纯数字如 `200` 按"最近 N 条"。需要同时配置 `cfg.history`（启用群聊历史落盘）和 `cfg.llm`。同一群同时只能有一份总结在生成，未完成前再次 `/summary` 会被回 `正在总结，请稍候…`。**启用 `cfg.history` 是项目里唯一会把用户消息持久化到磁盘的入口**，请权衡隐私需求后再开启。
 
 ## 不打算做的
 
 下面这些是**有意识的边界**，不是没空做。如果你想加，先想清楚是不是真的需要：
 
 - ❌ 主动推送、定时任务、订阅类命令（机器人是被动的）
-- ❌ 数据库、持久化的命令状态（命令默认无状态）
+- ❌ 数据库、其它形式的命令持久化状态（命令默认无状态；唯一例外是 `/summary` 用的群聊历史 JSONL 缓冲，且默认关闭）
 - ❌ 多账号、多实例（一个进程对一个号）
 - ❌ Web UI、远程管理面板
 - ❌ 富媒体上行（OCR、语音转文字等）—— 真要做，让 handler 自己用 LLM 多模态实现
@@ -66,6 +68,7 @@ QQBot/
 │   ├── plugins/         ← Handler 契约 + 文件注册表（chokidar 热加载）
 │   ├── config/          ← 配置 schema + JSON5 加载器（带回滚）
 │   ├── llm/             ← OpenAI 兼容 LLM 共享客户端
+│   ├── history/         ← 群聊消息 JSONL 缓冲（仅在 cfg.history 启用时生效）
 │   └── commands/        ← 一文件一命令
 ├── docs/                ← 设计文档与历史归档
 ├── scripts/
@@ -102,6 +105,7 @@ QQBot/
 下面几条是写代码时的硬规则，handler 作者也请遵守：
 
 - WS token、用户消息正文、用户内容、API key、图片 URL **全部不能进 info 日志**。
+- 用户消息内容唯一可能落盘的地方是 `cfg.history.dir`（仅在显式启用 `cfg.history` 后才会写入），用于 `/summary`。日志本身依然不会回显消息内容。
 - 每次命令触发只记一行结构化日志：`{ source, userId, groupId?, cmd, argvLen, latencyMs, ok, mid }`。
 - LLM 调用日志只含元数据：`{ provider, model, latencyMs, msgCount, tokens, finishReason }`，绝不记 messages 内容或响应文本。
 - handler 抛错由 dispatch 兜底，用户看到的是统一的"命令执行失败"，内部错误栈进 error 日志，不外泄。

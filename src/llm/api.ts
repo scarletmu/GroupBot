@@ -36,9 +36,30 @@ export interface ChatResponse {
   finishReason?: string;
 }
 
+export interface ImageRequest {
+  prompt: string;
+  provider?: string;
+  model?: string;
+  size?: string;
+  n?: number;
+  signal?: AbortSignal;
+}
+
+export interface ImageItem {
+  b64?: string;
+  url?: string;
+}
+
+export interface ImageResponse {
+  images: ImageItem[];
+  model: string;
+  provider: string;
+}
+
 export type LlmErrorCode =
   | 'NOT_CONFIGURED'
   | 'PROVIDER_NOT_FOUND'
+  | 'NO_IMAGE_MODEL'
   | 'TIMEOUT'
   | 'HTTP'
   | 'PARSE'
@@ -58,4 +79,5 @@ export class LlmError extends Error {
 
 export interface LlmClient {
   chat(req: ChatRequest): Promise<ChatResponse>;
+  image(req: ImageRequest): Promise<ImageResponse>;
 }

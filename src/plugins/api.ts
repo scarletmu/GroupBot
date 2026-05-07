@@ -6,6 +6,7 @@ import type {
   Segment,
 } from '../events/schema.js';
 import type { LlmClient } from '../llm/api.js';
+import type { HistoryReader } from '../history/store.js';
 
 export type CommandEvent = PrivateMessageEvent | GroupMessageEvent;
 
@@ -30,6 +31,12 @@ export interface CommandContext {
    * to call out to an LLM. Never expose direct user→LLM dialogue.
    */
   llm: LlmClient;
+  /**
+   * Read-only access to the group-message history buffer used by `/summary`.
+   * Present only when `cfg.history` is configured. Handlers that depend on
+   * this should reply with a friendly "未配置" message when it is undefined.
+   */
+  history?: HistoryReader;
 }
 
 export type CommandScope = 'private' | 'group' | 'both';

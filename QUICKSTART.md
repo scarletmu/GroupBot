@@ -9,9 +9,10 @@
 3. 跑通自动化验收（13 项 smoke 测试全过）。
 4. 用主号给小号发 `/help` 收到回复。
 5. 把测试群拉起来跑通群里 `@bot /help`。
-6. （可选）配置 LLM provider 让 `/translate` 工作。
-7. 进程管理（pm2 / launchd）让它常驻。
-8. 排错。
+6. （可选）配置 LLM provider 让 `/translate` 和 `/image` 工作。
+7. （可选）启用 `cfg.history` 让 `/summary` 工作。
+8. 进程管理（pm2 / launchd）让它常驻。
+9. 排错。
 
 预计 10–15 分钟。
 
@@ -72,7 +73,7 @@ cp config/bot.example.json5 config/bot.json5
   commandsDir: "src/commands",
   log: { level: "info", dir: "logs" },
 
-  // 可选: LLM 共享客户端，配了 /translate 才能工作
+  // 可选: LLM 共享客户端，配了 /translate 和 /image 才能工作
   // llm: { ... }   // 见后面 §6
 }
 ```
@@ -210,9 +211,9 @@ pnpm smoke
 
 ---
 
-## 7.（可选）配置 LLM，让 `/translate` 工作
+## 7.（可选）配置 LLM，让 `/translate` 和 `/image` 工作
 
-`/translate` 默认无配置时会回："翻译功能未配置（管理员需在 bot.json5 设置 llm）"。要让它工作，需要给一个 OpenAI 兼容的 API。
+`/translate` 默认无配置时会回："翻译功能未配置（管理员需在 bot.json5 设置 llm）"。`/image` 默认无配置时会回："生图功能未配置（管理员需在 bot.json5 设置 llm）"或"生图功能未配置（provider 缺 imageModel）"。要让两者工作，需要给一个 OpenAI 兼容的 API。
 
 编辑 `config/bot.json5`，加上 `llm` 块：
 
@@ -222,14 +223,16 @@ pnpm smoke
 
   llm: {
     default: "openai",
+    // imageDefault: "openai",   // 可选；不配则复用 default
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
         apiKey:  "sk-你的真实key",
-        model:   "gpt-4o-mini",       // 必须是支持视觉的模型才能翻译图片
+        model:   "gpt-4o-mini",        // chat: /translate 用；想翻图片需选支持视觉的
+        imageModel: "gpt-image-1",     // image: /image 用；不填则 /image 不可用
         timeout: 30000
       },
-      // 也可以同时配多家，按需切换 default
+      // 也可以同时配多家，按需切换 default / imageDefault
       // deepseek: {
       //   baseUrl: "https://api.deepseek.com/v1",
       //   apiKey:  "sk-...",
@@ -247,8 +250,47 @@ pnpm smoke
 - 文本：私聊小号 `/translate Hello, how are you?` → 期望收到中文译文。
 - 图片：私聊小号 `/translate` 时同时附一张含外文文字的图 → 期望收到图中文字的中文译文（**前提：用的 model 支持视觉**，比如 `gpt-4o-mini` / `qwen-vl-*`）。
 - 文本+图片同时给：也支持，会一起翻。
+- 生图：私聊小号 `/image a sparkling cat` → 期望收到一张图。`gpt-image-1` 默认返回 base64，会以 `base64://` 内联发回；`dall-e-3` 默认返回 URL（约 1 小时过期），优先选前者更稳。
 
 > ⚠️ apiKey 是真金白银的密钥，不要 commit 进 git。`config/bot.json5` 已经默认在 `.gitignore` 之外，但**你应该把真实密钥保存在 `config/bot.json5.local` 之类的本地文件里**（已 gitignored），生产环境用环境变量或 secret 管理工具替换进去。
+
+---
+
+## 7.5（可选）启用 `/summary` 群聊总结
+
+`/summary` 默认无配置时会回："总结功能未配置（管理员需在 bot.json5 设置 history）"。要让它工作，需要同时具备两件事：
+
+1. 已经按 §7 配好 `cfg.llm`（`/summary` 用 chat 模型生成总结）。
+2. 加上 `cfg.history` 块，把群聊消息按天滚动落到 JSONL 文件。
+
+```json5
+{
+  // ...其它字段...
+  llm: { /* 见 §7 */ },
+
+  history: {
+    dir: "data/history",            // 落盘目录，相对仓库根；data/ 已 gitignored
+    retentionDays: 2,               // 保留 2 整天，过期文件每小时自动清理
+    maxMessagesPerSummary: 1000     // 单次 /summary 最多喂给 LLM 多少条
+  }
+}
+```
+
+> ⚠️ **隐私与安全提醒**：这是项目里**唯一会把用户消息持久化到磁盘的地方**。开启前请确认：
+>
+> - 落盘目录在 `.gitignore` 范围内（默认 `data/` 已加入）。
+> - 你接受这种"群里聊什么 → 文件里就有什么"的取舍。
+> - 仅 `allowedGroups` 内的群消息会进缓冲；命令消息（at-self 或以 prefix 开头）自动排除。
+> - 不想要了把 `cfg.history` 整块去掉、重启进程、并手动 `rm -rf data/history` 即可。
+
+启用后的字段语义：
+- `history.dir`：**改完需要重启**进程才会生效（启动时才会决定是否启用 writer）。
+- `history.retentionDays`、`history.maxMessagesPerSummary`：保存即生效。
+
+测试：
+- 群里随意聊几句，然后 `@bot /summary` → 期望一份中文总结。留空区间 = 最近 1 小时。
+- `@bot /summary 30m` / `@bot /summary 200`（按时长 / 按条数）。
+- 同一群同时只允许一份总结生成中，再发会被回 `正在总结，请稍候…`。
 
 ---
 
@@ -347,7 +389,11 @@ journalctl -u qqbot -f
 | 修改了配置文件没生效 | 改的字段是 restart-required 的 | `listen.host` / `listen.port` / `listen.token` 改完需要手动重启进程，看启动日志会有 `restart-required` 提示 |
 | 命令文件存了没生效 | 文件没正确 export default | 确认 `src/commands/xxx.ts` 是 `export default` 一个对象，至少有 `name` / `description` / `handle` 三个字段 |
 | `/translate` 回 "翻译功能未配置" | `cfg.llm` 没配 | 看本文 §7 |
-| `/translate` 回 "命令执行失败" | LLM API 端出错 | 看 bot 的 error 日志，里面有 `LlmError` 一行带 `code` 和 `httpStatus`。常见：401（key 错）、404（model 不存在）、422（model 不支持视觉但你给了图） |
+| `/image` 回 "生图功能未配置（provider 缺 imageModel）" | provider 没设 `imageModel` | 在对应 provider 加 `imageModel: "gpt-image-1"` 之类，看 §7 |
+| `/translate` 或 `/image` 回 "命令执行失败" | LLM API 端出错 | 看 bot 的 error 日志，里面有 `LlmError` 一行带 `code` 和 `httpStatus`。常见：401（key 错）、404（model 不存在）、422（model 不支持视觉但你给了图） |
+| `/summary` 回 "总结功能未配置（管理员需在 bot.json5 设置 history）" | 没启用 `cfg.history` | 看本文 §7.5 |
+| `/summary` 回 "总结功能未配置（管理员需在 bot.json5 设置 llm）" | 没配 `cfg.llm` | 看本文 §7 |
+| `/summary` 回 "该时间段没有可总结的消息" | 缓冲里在该区间没东西 | 群是不是刚启用 `history`、还没攒下消息？只缓冲 `allowedGroups` 内的非命令消息，命令消息自动排除 |
 
 如果排错过程里你怀疑是 trigger 逻辑或 router 的 bug，**不要改代码先**，先跑 `pnpm smoke` 看看是不是 13/13。如果 smoke 是绿的，那 bug 大概率在配置或 NapCat 侧。
 

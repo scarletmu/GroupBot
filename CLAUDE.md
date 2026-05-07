@@ -46,6 +46,7 @@ Chinese, detailed, written for the operator/maintainer. **Don't open these proac
 - **Add commands by file only:** never edit `src/index.ts` or `src/router/*` to register a command. That's AC-11.
 - **No direct user↔LLM dialogue:** the bot is `/<cmd>`-driven. LLM is plumbing for handler authors via `ctx.llm`. No `/ask`, no `/chat`. Bounded tool commands like `/translate` are fine.
 - **Logging:** never log WS token, full message body, user content, `apiKey`, or image URLs. LLM info logs carry only `{ provider, model, latencyMs, msgCount, tokens, finishReason }`. Handler errors → `命令执行失败` to the user, stack to error log, no internals leaked.
+- **Persistence is opt-in.** The `cfg.history` JSONL buffer (used by `/summary`) is the *only* place user content ever lands on disk. Off by default. Don't add other persistence layers, in-memory globals shared across handlers, or alternative on-disk stores without an explicit conversation.
 - **Stack is locked:** no NoneBot/Koishi/openai-SDK/axios. See `architecture.md#locked-decisions--out-of-scope`.
 
 ## Workflow
@@ -58,8 +59,8 @@ Chinese, detailed, written for the operator/maintainer. **Don't open these proac
 
 ## Current state
 
-P0+P1 plus LLM shared client are landed. Verified via `pnpm smoke` (13/13) and synthetic OB11 frames; AC-15 (24h soak) and full round-trip against a real NapCat client are not yet automated.
+P0+P1 plus LLM shared client and group history buffer are landed. Verified via `pnpm smoke` (13/13) and synthetic OB11 frames; AC-15 (24h soak) and full round-trip against a real NapCat client are not yet automated.
 
-Active commands: `/help`, `/translate` (text + multimodal, requires `cfg.llm`).
+Active commands: `/help`, `/translate` (text + multimodal, requires `cfg.llm`), `/image` (generation, requires `cfg.llm` with provider `imageModel`), `/summary` (group-only, requires both `cfg.history` and `cfg.llm`).
 
-`CommandContext` surface: `event`, `argv`, `reply`, `log`, `cfg`, `listCommands()`, `llm`.
+`CommandContext` surface: `event`, `argv`, `reply`, `log`, `cfg`, `listCommands()`, `llm`, `history?`.

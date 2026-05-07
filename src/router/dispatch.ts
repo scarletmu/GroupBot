@@ -9,6 +9,7 @@ import type { LlmClient } from '../llm/api.js';
 import type { CommandRegistry } from '../plugins/registry.js';
 import type { Ob11Client } from '../transport/ob11-client.js';
 import type { CommandContext, CommandHandler, ReplyContent } from '../plugins/api.js';
+import type { HistoryReader } from '../history/store.js';
 import { parseCommand } from './parse-cmd.js';
 import { evaluateGroup, evaluatePrivate } from './trigger.js';
 
@@ -26,6 +27,7 @@ export class Dispatcher {
     private readonly log: Logger,
     private readonly cfg: () => BotConfig,
     private readonly llm: LlmClient,
+    private readonly history?: HistoryReader,
   ) {}
 
   async handlePrivate(ev: PrivateMessageEvent): Promise<void> {
@@ -96,6 +98,7 @@ export class Dispatcher {
       cfg,
       listCommands: () => this.registry.list(),
       llm: this.llm,
+      ...(this.history ? { history: this.history } : {}),
     };
 
     try {

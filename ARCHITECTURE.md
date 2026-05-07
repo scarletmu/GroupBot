@@ -49,12 +49,17 @@ src/
 ├── config/             ← 配置加载
 │   ├── schema.ts       ← BotConfig 的 zod schema
 │   └── loader.ts       ← JSON5 解析 + 校验失败回滚 + 热重载
-├── llm/                ← OpenAI 兼容 LLM 共享客户端
+├── llm/                ← OpenAI 兼容 LLM 共享客户端（chat + 生图）
 │   ├── api.ts          ← 对外契约（类型 + LlmError）
-│   └── client.ts       ← 用内置 fetch 实现的调用
+│   └── client.ts       ← 用内置 fetch 实现的调用，复用同一份 provider 配置
+├── history/            ← 群聊消息 JSONL 缓冲（仅 cfg.history 启用时生效）
+│   ├── store.ts        ← HistoryStore：append / recent / cleanupOlderThan
+│   └── format.ts       ← segment→文本占位符、发言人名、区间参数解析
 └── commands/           ← 一文件一命令，热加载
     ├── help.ts
-    └── translate.ts
+    ├── translate.ts
+    ├── image.ts
+    └── summary.ts
 ```
 
 每个目录的职责是有意识切开的：
@@ -106,6 +111,12 @@ NapCat 启动后主动连 `ws://127.0.0.1:6700`，HTTP 升级请求里带 `Autho
 ```
 
 `events/parse.ts` 用 zod 校验这个 JSON，分类成 `private | group | meta | notice | request | api-response | unknown | invalid` 之一。校验失败的会记 warn 后丢掉（不会让进程崩）。这层的价值是：下游所有代码拿到的都是 typed 数据，不用自己写 `if (typeof ... === 'string')` 这种防御代码。
+
+**第 2.5 步：可选——把消息存进群聊历史缓冲**
+
+如果 `cfg.history` 配了，且这条消息满足 (a) `message_type === 'group'`、(b) `group_id ∈ cfg.allowedGroups`、(c) 看起来不是命令（既没 at-self，首段 text 也不以 prefix 开头）——那么 `historyStore.append(event)` 会**先于**触发判定异步追加到 JSONL 文件（按天滚动，按群分文件，路径形如 `data/history/group-<gid>-<YYYYMMDD>.jsonl`）。这一步是 fire-and-forget 的，磁盘错误只记 warn，不挡分发主流程。
+
+如果 `cfg.history` 没配，整个第 2.5 步**不存在**——一行用户内容都不会落盘。这是 `/summary` 唯一会用到的"持久状态"，把它做成可选是有意的：默认零持久化，需要时显式打开。
 
 **第 3 步：触发判定**
 
@@ -163,6 +174,7 @@ NapCat 启动后主动连 `ws://127.0.0.1:6700`，HTTP 升级请求里带 `Autho
   cfg,                             // 当前配置快照（即拍即用，不会变）
   listCommands: () => ...,         // 命令列表快照，给 /help 用
   llm,                             // LLM 共享客户端
+  history?,                        // 群聊历史读接口；只在 cfg.history 启用时存在
 }
 ```
 
@@ -280,15 +292,25 @@ bot 跑起来就不应该崩。这通过几层防御实现：
 - 直接对话会让账号风险大涨——QQ 安全机制对"看起来像聊天的高频消息"特别敏感。
 - 直接对话会让用量失控——每条群消息 at 一下都能跑 LLM 调用，钱包很快受不了。
 
-所以我们的 LLM 是**包在 `ctx.llm` 里的工具**，handler 决定什么时候用、用什么 prompt、解析成什么输出。`/translate` 是第一个示例：输入有界（一条文本或几张图）、输出有界（一句中文译文）、调用频率有界（用户得显式发 `/translate`）。
+所以我们的 LLM 是**包在 `ctx.llm` 里的工具**，handler 决定什么时候用、用什么 prompt、解析成什么输出。`/translate` 是第一个示例：输入有界（一条文本或几张图）、输出有界（一句中文译文）、调用频率有界（用户得显式发 `/translate`）。`/image` 是第二个：prompt 有界、输出是单张图片、必须显式 `/image` 才会触发。`ctx.llm` 暴露两个方法 `chat()` 和 `image()`，分别对应 OpenAI 兼容的 `/chat/completions` 与 `/images/generations`，共用同一份 provider 配置。
+
+`/image` 在 handler 内额外加了一道**按 QQ 用户的并发锁**（同一用户同时只能有一张图在生成中）。生图慢、容易刷、单价比 chat 高，dispatch 那层的 5/10s token bucket 颗粒度太粗——5 次连发都能进队列，外加一张图的端到端时延（10–30s）足以堆出几个并发请求把账单和 NapCat 出口都打爆。锁粒度选了"按 QQ 用户全局"而不是"按会话"，避免同一人在私聊 + 群聊里并发刷；用 `finally` 释放，保证抛错/超时也不会卡死。
+
+`/summary` 走的是 chat 通道，但单次会把"区间内全部消息（最多 `maxMessagesPerSummary` 条）"喂进 prompt，输出量 / 时延 / 单价都比 `/translate` 高一档。锁粒度这里选了"按群"而不是"按 QQ 用户"——一个群里多人同时戳 `/summary` 没意义（结论会几乎一样），并发只会把账单刷高；不同群之间互不影响。区间过大时取最新若干条 + 在回复前缀里说明 "（区间过大，仅总结最新 N 条）"，避免静默截断。
 
 **多 provider 命名表的选择**
 
 ```json5
 llm: {
   default: "openai",
+  // imageDefault: "openai",   // 可选；不配则复用 default
   providers: {
-    openai:   { baseUrl, apiKey, model, ... },
+    openai: {
+      baseUrl, apiKey,
+      model: "gpt-4o-mini",         // chat
+      imageModel: "gpt-image-1",    // 生图，可选
+      ...
+    },
     deepseek: { baseUrl, apiKey, model, ... },
   }
 }
@@ -296,15 +318,20 @@ llm: {
 
 而不是单 provider。原因：
 
-- 不同 provider 强项不同（视觉、代码、中文等），handler 可以指定用哪个。
+- 不同 provider 强项不同（视觉、代码、中文、生图等），handler 可以指定用哪个。
 - 万一某家挂了或涨价，可以快速切。
 - API key 和 baseUrl 是耦合的（不同 provider 走不同域名），分开存比平铺更清晰。
+- chat 和生图共用一份 provider 条目（同一个 baseUrl / apiKey 通常服务两边），靠 `imageModel` 字段区分模型；如果 chat 和生图想走不同家，再用 `imageDefault` 切。
 
-`default` 必须在 `providers` 里——zod refine 校验。
+`default` 和 `imageDefault` 都必须在 `providers` 里——zod refine 校验。
 
 **日志安全**
 
-LLM 调用日志只记 `{ provider, model, latencyMs, msgCount, promptTokens, completionTokens, finishReason }`——元数据。绝不记 messages 内容、响应文本、图片 URL（图片 URL 也是用户上传的内容）、apiKey。HTTP 错误响应的 body 片段只进 debug 日志，避免上游某些错误响应里把 apiKey 回显进 error message 时漏到 info。
+LLM 调用日志只记元数据，绝不记 messages 内容、prompt、响应文本、图片 URL（图片 URL 也是用户上传的内容）、b64 图片数据、apiKey：
+- `chat`：`{ provider, model, latencyMs, msgCount, promptTokens, completionTokens, finishReason }`
+- `image`：`{ provider, model, latencyMs, n, hasB64, hasUrl }`
+
+HTTP 错误响应的 body 片段只进 debug 日志，避免上游某些错误响应里把 apiKey 回显进 error message 时漏到 info。
 
 这条规则跟全局的"不记用户内容"一脉相承。LLM 调用是隐私敏感场景的放大器（既有用户输入又有第三方 API 的中间结果），更要严格。
 
@@ -338,7 +365,7 @@ LLM 调用日志只记 `{ provider, model, latencyMs, msgCount, promptTokens, co
 - 不引入任何 OneBot 框架（NoneBot、Koishi 等）。原因：框架带来的重量（依赖树、抽象、生命周期、文档负担）对一个个人小机器人是负值。
 - 反向 WS 唯一接入方式。不做 HTTP 回调、不做正向 WS。
 - 单一配置文件。不引入环境变量、不引入分层配置覆盖。
-- 不引入数据库。命令默认无状态。
+- 不引入数据库。命令默认无状态——唯一例外是 `cfg.history` 那块 JSONL 群聊缓冲，仅给 `/summary` 用，opt-in、按群分文件、按天滚动、按 `retentionDays` 自动清理。再要加任何持久化先讨论。
 - LLM 调用不用 `openai` SDK，不用 `axios`。Node 内置 `fetch` + `AbortController` 完全够。
 
 **Out of scope**
@@ -346,7 +373,7 @@ LLM 调用日志只记 `{ provider, model, latencyMs, msgCount, promptTokens, co
 - 主动推送、定时任务、订阅。机器人是被动的——它响应消息，不发起对话。
 - 多账号 / 多实例。一个进程一个号。要多个开多个进程。
 - Web UI、远程管理面板。配置就是一份文件。
-- 持久化命令状态。命令是无状态函数。
+- 持久化命令状态——`cfg.history` 是已经规划好的唯一例外（专为 `/summary`），handler 自身不应该依赖任何隐式全局状态。
 - 富媒体上行（OCR、ASR 等）。用户要这种功能，让 handler 自己用 LLM 多模态去做。
 - 用户↔LLM 直接对话。已经讲过了，不再重复。
 
